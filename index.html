@@ -1,0 +1,492 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Bug Hunter — vashxd</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      background: radial-gradient(1200px 700px at 30% 10%, #1b1f2a, #0b0e14);
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      color: #e9eef7;
+      overflow: hidden;
+    }
+    canvas { display:block; margin:0 auto; }
+    .hud {
+      position: fixed;
+      left: 16px;
+      top: 14px;
+      display: grid;
+      gap: 10px;
+      user-select: none;
+      pointer-events: none;
+      font-size: 14px;
+      opacity: 0.95;
+    }
+    .pill {
+      display: inline-flex;
+      gap: 10px;
+      align-items: center;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.10);
+      backdrop-filter: blur(8px);
+      padding: 10px 12px;
+      border-radius: 999px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+      width: max-content;
+    }
+    .k {
+      display:inline-flex;
+      min-width: 22px;
+      height: 22px;
+      align-items:center;
+      justify-content:center;
+      border-radius: 7px;
+      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(0,0,0,0.25);
+      font-weight: 700;
+      font-size: 12px;
+      padding: 0 6px;
+    }
+    .legend {
+      position: fixed;
+      right: 16px;
+      top: 14px;
+      display: grid;
+      gap: 10px;
+      user-select: none;
+      pointer-events: none;
+      font-size: 13px;
+      text-align: right;
+      opacity: 0.95;
+    }
+    .legend .row { display:flex; gap:10px; justify-content:flex-end; align-items:center; }
+    .dot { width:10px; height:10px; border-radius: 50%; display:inline-block; }
+    .dot.c { background:#ff4d6d; box-shadow:0 0 12px rgba(255,77,109,0.45); }
+    .dot.m { background:#ffb703; box-shadow:0 0 12px rgba(255,183,3,0.35); }
+    .dot.n { background:#80ed99; box-shadow:0 0 12px rgba(128,237,153,0.35); }
+
+    .center {
+      position: fixed;
+      inset: 0;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      pointer-events:none;
+      text-align:center;
+      padding: 24px;
+    }
+    .card {
+      pointer-events:none;
+      max-width: 720px;
+      border-radius: 22px;
+      padding: 22px 22px;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.10);
+      backdrop-filter: blur(10px);
+      box-shadow: 0 24px 80px rgba(0,0,0,0.45);
+    }
+    .title { font-size: 28px; font-weight: 900; letter-spacing: -0.02em; margin: 0 0 8px; }
+    .sub { margin: 0 0 12px; opacity: 0.9; line-height:1.4; }
+    .tip { opacity: 0.85; font-size: 13px; line-height:1.5; margin: 12px 0 0; }
+    .hide { display:none; }
+    a { color: #9ae6ff; }
+  </style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <div class="hud">
+    <div class="pill">
+      <strong>Bug Hunter</strong>
+      <span style="opacity:.8">|</span>
+      <span>Score: <strong id="score">0</strong></span>
+      <span>Streak: <strong id="streak">0</strong></span>
+      <span>HP: <strong id="hp">5</strong></span>
+      <span>Lvl: <strong id="lvl">1</strong></span>
+    </div>
+    <div class="pill" style="opacity:.9">
+      <span><span class="k">1</span> Critical</span>
+      <span><span class="k">2</span> Major</span>
+      <span><span class="k">3</span> Minor</span>
+      <span style="opacity:.8">|</span>
+      <span><span class="k">P</span> Pause</span>
+      <span><span class="k">R</span> Restart</span>
+    </div>
+  </div>
+
+  <div class="legend">
+    <div class="pill">
+      <div class="row"><span class="dot c"></span><span>CRITICAL</span></div>
+      <div class="row"><span class="dot m"></span><span>MAJOR</span></div>
+      <div class="row"><span class="dot n"></span><span>MINOR</span></div>
+    </div>
+  </div>
+
+  <div class="center" id="overlay">
+    <div class="card">
+      <h1 class="title">🧪 Bug Hunter</h1>
+      <p class="sub">
+        Bugs estão caindo! Classifique o bug <strong>antes</strong> de ele passar da linha.
+        <br/>Aperte <strong>1</strong> (Critical), <strong>2</strong> (Major) ou <strong>3</strong> (Minor).
+      </p>
+      <p class="tip">
+        Dica: pontuação aumenta com <strong>streak</strong>. Errou? perde HP. Miss? perde mais.
+        <br/>Pressione qualquer tecla para começar.
+      </p>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+
+  const ui = {
+    score: document.getElementById("score"),
+    streak: document.getElementById("streak"),
+    hp: document.getElementById("hp"),
+    lvl: document.getElementById("lvl"),
+    overlay: document.getElementById("overlay"),
+  };
+
+  // --- sizing
+  function resize() {
+    const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+    const w = Math.min(window.innerWidth, 980);
+    const h = Math.min(window.innerHeight, 720);
+    canvas.width = Math.floor(w * dpr);
+    canvas.height = Math.floor(h * dpr);
+    canvas.style.width = w + "px";
+    canvas.style.height = h + "px";
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener("resize", resize);
+  resize();
+
+  // --- game state
+  const Sev = {
+    C: { name: "CRITICAL", color: "#ff4d6d", key: "1", points: 30, r: 18 },
+    M: { name: "MAJOR",   color: "#ffb703", key: "2", points: 20, r: 16 },
+    N: { name: "MINOR",   color: "#80ed99", key: "3", points: 12, r: 14 },
+  };
+  const sevList = ["C","M","N"];
+
+  let bugs = [];
+  let particles = [];
+  let running = false;
+  let paused = false;
+
+  let score = 0;
+  let streak = 0;
+  let hp = 5;
+  let level = 1;
+
+  // pacing
+  let spawnTimer = 0;
+  let spawnInterval = 950; // ms
+  let speedBase = 110; // px/s
+  let missLineY = 0;
+
+  function reset() {
+    bugs = [];
+    particles = [];
+    running = false;
+    paused = false;
+    score = 0;
+    streak = 0;
+    hp = 5;
+    level = 1;
+    spawnTimer = 0;
+    spawnInterval = 950;
+    speedBase = 110;
+    ui.overlay.classList.remove("hide");
+    syncHud();
+  }
+
+  function syncHud() {
+    ui.score.textContent = score;
+    ui.streak.textContent = streak;
+    ui.hp.textContent = hp;
+    ui.lvl.textContent = level;
+  }
+
+  function rand(a,b){ return a + Math.random()*(b-a); }
+  function pickSev() {
+    // peso: major mais comum, minor comum, critical menos
+    const r = Math.random();
+    if (r < 0.18) return "C";
+    if (r < 0.62) return "M";
+    return "N";
+  }
+
+  function spawnBug() {
+    const key = pickSev();
+    const s = Sev[key];
+    const w = canvas.clientWidth;
+    const x = rand(60, w - 60);
+    const y = -40;
+    const fall = speedBase + rand(0, 35) + (level - 1) * 14;
+    const wob = rand(0.6, 1.6) * (Math.random() < 0.5 ? -1 : 1);
+    bugs.push({
+      key,
+      x, y,
+      r: s.r,
+      vy: fall,
+      wob,
+      t: rand(0, 1000),
+      alive: true,
+    });
+  }
+
+  function pop(x,y,color,amount=18) {
+    for (let i=0;i<amount;i++){
+      particles.push({
+        x, y,
+        vx: rand(-120,120),
+        vy: rand(-160, 40),
+        life: rand(0.25, 0.65),
+        age: 0,
+        color
+      });
+    }
+  }
+
+  function textFloat(x,y,txt,color){
+    particles.push({
+      x, y,
+      vx: rand(-20,20),
+      vy: rand(-90,-50),
+      life: 0.9,
+      age: 0,
+      color,
+      text: txt
+    });
+  }
+
+  function applyLevel() {
+    // sobe de nível a cada 250 pontos
+    const newLevel = 1 + Math.floor(score / 250);
+    if (newLevel !== level) {
+      level = newLevel;
+      // mais rápido e mais spawns
+      spawnInterval = Math.max(360, 950 - (level-1)*70);
+      speedBase = 110 + (level-1)*12;
+      textFloat(canvas.clientWidth/2, 90, `LEVEL ${level}`, "#9ae6ff");
+    }
+  }
+
+  function damage(amount, reason, x, y) {
+    hp -= amount;
+    streak = 0;
+    textFloat(x ?? 120, y ?? 120, reason, "#ff4d6d");
+    if (hp <= 0) {
+      hp = 0;
+      gameOver();
+    }
+  }
+
+  function gameOver() {
+    running = false;
+    paused = false;
+    ui.overlay.classList.remove("hide");
+    ui.overlay.querySelector(".title").textContent = "💥 Game Over";
+    ui.overlay.querySelector(".sub").innerHTML =
+      `Seu score foi <strong>${score}</strong> (Level ${level}).<br/>Pressione <strong>R</strong> para reiniciar.`;
+    ui.overlay.querySelector(".tip").innerHTML =
+      `Dica: manter streak dá mais pontos. Acertar Critical vale mais — mas aparece menos.`;
+  }
+
+  function start() {
+    if (running) return;
+    running = true;
+    paused = false;
+    ui.overlay.classList.add("hide");
+  }
+
+  // --- input
+  window.addEventListener("keydown", (e) => {
+    const k = e.key.toLowerCase();
+
+    if (!running && k !== "r") start();
+
+    if (k === "p") paused = !paused;
+    if (k === "r") {
+      reset();
+      return;
+    }
+    if (paused || !running) return;
+
+    // classify using 1/2/3
+    const hitKey = (k === "1") ? "C" : (k === "2") ? "M" : (k === "3") ? "N" : null;
+    if (!hitKey) return;
+
+    // find nearest bug to the "target zone" (middle-ish) to make it feel responsive
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    const targetY = h * 0.58;
+    let best = null;
+    let bestDist = Infinity;
+
+    for (const b of bugs) {
+      if (!b.alive) continue;
+      const dx = (b.x - w/2);
+      const dy = (b.y - targetY);
+      const d = Math.hypot(dx*0.7, dy); // weight y more
+      if (d < bestDist) { bestDist = d; best = b; }
+    }
+
+    if (!best) return;
+
+    const correct = best.key === hitKey;
+
+    if (correct) {
+      const s = Sev[best.key];
+      best.alive = false;
+      const bonus = Math.min(10, streak) * 2;
+      const gained = s.points + bonus;
+      score += gained;
+      streak += 1;
+
+      pop(best.x, best.y, s.color, 20);
+      textFloat(best.x, best.y, `+${gained}`, s.color);
+
+      applyLevel();
+      syncHud();
+    } else {
+      // wrong classification: small damage
+      const bx = best.x, by = best.y;
+      pop(bx, by, "#ff4d6d", 10);
+      damage(1, "WRONG", bx, by);
+      syncHud();
+    }
+  });
+
+  // --- loop
+  let last = performance.now();
+  function tick(now) {
+    const dt = Math.min(0.033, (now - last) / 1000);
+    last = now;
+
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    missLineY = h - 90;
+
+    if (running && !paused) {
+      spawnTimer += dt * 1000;
+      if (spawnTimer >= spawnInterval) {
+        spawnTimer = 0;
+        spawnBug();
+        if (level >= 4 && Math.random() < 0.25) spawnBug(); // extra spawn at higher levels
+      }
+
+      for (const b of bugs) {
+        if (!b.alive) continue;
+        b.t += dt;
+        b.y += b.vy * dt;
+        b.x += Math.sin(b.t * 2.4) * b.wob * 18 * dt;
+
+        // miss line => bigger damage
+        if (b.y - b.r > missLineY) {
+          b.alive = false;
+          damage(2, "MISS", b.x, missLineY);
+          pop(b.x, missLineY, "#ff4d6d", 14);
+          syncHud();
+        }
+      }
+
+      // cleanup
+      bugs = bugs.filter(b => b.alive);
+    }
+
+    // particles
+    for (const p of particles) {
+      p.age += dt;
+      p.x += (p.vx || 0) * dt;
+      p.y += (p.vy || 0) * dt;
+      if (p.vy != null) p.vy += 220 * dt;
+    }
+    particles = particles.filter(p => p.age < p.life);
+
+    // --- draw
+    ctx.clearRect(0,0,w,h);
+
+    // background grid
+    ctx.save();
+    ctx.globalAlpha = 0.18;
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.lineWidth = 1;
+    const step = 36;
+    for (let x=0; x<w; x+=step) {
+      ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke();
+    }
+    for (let y=0; y<h; y+=step) {
+      ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke();
+    }
+    ctx.restore();
+
+    // miss line
+    ctx.save();
+    ctx.strokeStyle = "rgba(255,255,255,0.18)";
+    ctx.setLineDash([6, 10]);
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, missLineY);
+    ctx.lineTo(w, missLineY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = "rgba(255,255,255,0.55)";
+    ctx.font = "12px ui-sans-serif, system-ui";
+    ctx.fillText("MISS LINE", 12, missLineY - 10);
+    ctx.restore();
+
+    // bugs
+    for (const b of bugs) {
+      const s = Sev[b.key];
+      // body
+      ctx.save();
+      ctx.translate(b.x, b.y);
+      // glow
+      ctx.globalAlpha = 0.25;
+      ctx.fillStyle = s.color;
+      ctx.beginPath();
+      ctx.arc(0,0,b.r*1.6,0,Math.PI*2);
+      ctx.fill();
+
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = "rgba(0,0,0,0.35)";
+      ctx.beginPath();
+      ctx.arc(2,3,b.r*1.05,0,Math.PI*2);
+      ctx.fill();
+
+      ctx.fillStyle = s.color;
+      ctx.beginPath();
+      ctx.arc(0,0,b.r,0,Math.PI*2);
+      ctx.fill();
+
+      // little "bug legs"
+      ctx.strokeStyle = "rgba(0,0,0,0.45)";
+      ctx.lineWidth = 2;
+      for (let i=-2;i<=2;i++){
+        ctx.beginPath();
+        ctx.moveTo(-b.r*0.2, i*4);
+        ctx.lineTo(-b.r*0.9, i*6);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(b.r*0.2, i*4);
+        ctx.lineTo(b.r*0.9, i*6);
+        ctx.stroke();
+      }
+
+      // label
+      ctx.fillStyle = "rgba(255,255,255,0.95)";
+      ctx.font = "bold 12px ui-sans-serif, system-ui";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(s.key, 0, 1);
+      ctx.restore();
+    }
+
+    //
