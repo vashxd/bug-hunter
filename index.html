@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
-  <title>Bug Hunter V2 — vashxd</title>
+  <title>Bug Hunter V2.1 — vashxd</title>
   <style>
     :root { color-scheme: dark; }
     body {
@@ -75,19 +75,20 @@
     .dot.m { background:#ffb703; box-shadow:0 0 12px rgba(255,183,3,0.35); }
     .dot.n { background:#80ed99; box-shadow:0 0 12px rgba(128,237,153,0.35); }
 
+    /* ✅ Overlay now clickable */
     .center {
       position: fixed;
       inset: 0;
       display:flex;
       align-items:center;
       justify-content:center;
-      pointer-events:none;
+      pointer-events:auto;
       text-align:center;
       padding: 16px;
       z-index: 10;
     }
     .card {
-      pointer-events:none;
+      pointer-events:auto;
       width: min(760px, 100%);
       border-radius: 22px;
       padding: 18px 16px;
@@ -203,7 +204,6 @@
 
     @media (max-width: 900px), (pointer: coarse) {
       .controls { display: grid; }
-      /* add breathing space so miss line isn't hidden by buttons */
       body { padding-bottom: 116px; }
     }
 
@@ -215,7 +215,7 @@
 
   <div class="hud">
     <div class="pill">
-      <strong>Bug Hunter V2</strong>
+      <strong>Bug Hunter V2.1</strong>
       <span style="opacity:.8">|</span>
       <span>Score: <strong id="score">0</strong></span>
       <span>Streak: <strong id="streak">0</strong></span>
@@ -244,8 +244,8 @@
   </div>
 
   <div class="center" id="overlay">
-    <div class="card">
-      <h1 class="title" id="ovTitle">🧪 Bug Hunter V2</h1>
+    <div class="card" id="overlayCard">
+      <h1 class="title" id="ovTitle">🧪 Bug Hunter V2.1</h1>
       <p class="sub" id="ovSub">
         Bugs estão caindo! Classifique com <strong>1</strong>, <strong>2</strong> ou <strong>3</strong> antes de passar da linha.
         <br/>No celular, use os botões embaixo.
@@ -273,7 +273,7 @@
       </div>
 
       <p class="tip" style="margin-top:12px">
-        Pressione qualquer tecla (ou toque em um botão) para começar.
+        Clique em qualquer lugar (ou pressione qualquer tecla) para começar.
       </p>
     </div>
   </div>
@@ -310,6 +310,7 @@
     lvl: document.getElementById("lvl"),
     snd: document.getElementById("snd"),
     overlay: document.getElementById("overlay"),
+    overlayCard: document.getElementById("overlayCard"),
     ovTitle: document.getElementById("ovTitle"),
     ovSub: document.getElementById("ovSub"),
     lb: document.getElementById("lb"),
@@ -321,9 +322,7 @@
   let soundOn = true;
 
   function ensureAudio() {
-    if (!audioCtx) {
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    }
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     if (audioCtx.state === "suspended") audioCtx.resume();
   }
   function beep(freq=440, dur=0.06, type="sine", gain=0.06) {
@@ -387,14 +386,438 @@
   }
   function renderLB() {
     const list = loadLB();
-    const html = list.length ? list.map((x,i) => `
-      <div class="item">
-        <span>#${i+1} <span style="opacity:.9">${fmtDate(x.when)}</span></span>
-        <strong class="mono">${x.score}</strong>
-      </div>
-    `).join("") : `<div class="tip" style="opacity:.8">Sem scores ainda. Jogue e entre no top 5 😈</div>`;
-    ui.lb.innerHTML = html;
+    ui.lb.innerHTML = list.length
+      ? list.map((x,i) => `
+        <div class="item">
+          <span>#${i+1} <span style="opacity:.9">${fmtDate(x.when)}</span></span>
+          <strong class="mono">${x.score}</strong>
+        </div>
+      `).join("")
+      : `<div class="tip" style="opacity:.8">Sem scores ainda. Jogue e entre no top 5 😈</div>`;
   }
   function maybeAddScore(finalScore) {
     const list = loadLB();
-    list.push({ score: finalSc
+    list.push({ score: finalScore, when: Date.now() });
+    list.sort((a,b) => b.score - a.score);
+    const top = list.slice(0,5);
+    saveLB(top);
+    renderLB();
+    return top.some(x => x.score === finalScore);
+  }
+
+  // ---- game state
+  const Sev = {
+    C: { name: "CRITICAL", color: "#ff4d6d", key: "1", points: 30, r: 18 },
+    M: { name: "MAJOR",   color: "#ffb703", key: "2", points: 20, r: 16 },
+    N: { name: "MINOR",   color: "#80ed99", key: "3", points: 12, r: 14 },
+  };
+
+  let bugs = [];
+  let particles = [];
+  let running = false;
+  let paused = false;
+
+  let score = 0;
+  let streak = 0;
+  let hp = 5;
+  let level = 1;
+
+  let spawnTimer = 0;
+  let spawnInterval = 930; // ms
+  let speedBase = 112;     // px/s
+  let missLineY = 0;
+
+  function syncHud() {
+    ui.score.textContent = score;
+    ui.streak.textContent = streak;
+    ui.hp.textContent = hp;
+    ui.lvl.textContent = level;
+    ui.snd.textContent = soundOn ? "On" : "Off";
+  }
+
+  function resetOverlayText() {
+    ui.ovTitle.textContent = "🧪 Bug Hunter V2.1";
+    ui.ovSub.innerHTML =
+      `Bugs estão caindo! Classifique com <strong>1</strong>, <strong>2</strong> ou <strong>3</strong> antes de passar da linha.` +
+      `<br/>No celular, use os botões embaixo.`;
+  }
+
+  function reset() {
+    bugs = [];
+    particles = [];
+    running = false;
+    paused = false;
+    score = 0;
+    streak = 0;
+    hp = 5;
+    level = 1;
+    spawnTimer = 0;
+    spawnInterval = 930;
+    speedBase = 112;
+    resetOverlayText();
+    ui.overlay.classList.remove("hide");
+    renderLB();
+    syncHud();
+  }
+
+  function rand(a,b){ return a + Math.random()*(b-a); }
+  function pickSev() {
+    const r = Math.random();
+    if (r < 0.18) return "C";
+    if (r < 0.62) return "M";
+    return "N";
+  }
+
+  function spawnBug() {
+    const key = pickSev();
+    const s = Sev[key];
+    const w = canvas.clientWidth;
+    const x = rand(56, w - 56);
+    const y = -40;
+    const fall = speedBase + rand(0, 40) + (level - 1) * 14;
+    const wob = rand(0.6, 1.8) * (Math.random() < 0.5 ? -1 : 1);
+    bugs.push({ key, x, y, r: s.r, vy: fall, wob, t: rand(0, 1000), alive: true });
+  }
+
+  function pop(x,y,color,amount=18) {
+    for (let i=0;i<amount;i++){
+      particles.push({
+        x, y,
+        vx: rand(-140,140),
+        vy: rand(-180, 60),
+        life: rand(0.25, 0.7),
+        age: 0,
+        color
+      });
+    }
+  }
+
+  function textFloat(x,y,txt,color){
+    particles.push({
+      x, y,
+      vx: rand(-22,22),
+      vy: rand(-95,-55),
+      life: 0.9,
+      age: 0,
+      color,
+      text: txt
+    });
+  }
+
+  function applyLevel() {
+    const newLevel = 1 + Math.floor(score / 250);
+    if (newLevel !== level) {
+      level = newLevel;
+      spawnInterval = Math.max(340, 930 - (level-1)*75);
+      speedBase = 112 + (level-1)*12;
+      textFloat(canvas.clientWidth/2, 92, `LEVEL ${level}`, "#9ae6ff");
+      sfx("lvl");
+    }
+  }
+
+  function damage(amount, reason, x, y, kind) {
+    hp -= amount;
+    streak = 0;
+    textFloat(x ?? 120, y ?? 120, reason, "#ff4d6d");
+    pop(x ?? 120, y ?? 120, "#ff4d6d", 14);
+    sfx(kind || "wrong");
+    if (hp <= 0) {
+      hp = 0;
+      gameOver();
+    }
+  }
+
+  function gameOver() {
+    running = false;
+    paused = false;
+
+    const madeTop = maybeAddScore(score);
+    const medal = madeTop ? "🏆" : "💥";
+    ui.overlay.classList.remove("hide");
+    ui.ovTitle.textContent = `${medal} Game Over`;
+    ui.ovSub.innerHTML =
+      `Seu score foi <strong>${score}</strong> (Level ${level}).<br/>Pressione <strong>R</strong> para reiniciar.`;
+    sfx("over");
+    syncHud();
+  }
+
+  function start() {
+    if (running) return;
+    running = true;
+    paused = false;
+    ui.overlay.classList.add("hide");
+    // unlock audio on first interaction
+    ensureAudio();
+    syncHud();
+  }
+
+  function toggleMute() {
+    soundOn = !soundOn;
+    syncHud();
+  }
+
+  // ✅ CLASSIFY helper
+  function classify(hitKey) {
+    if (!running) start();
+    if (paused || !running) return;
+
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    const targetY = h * 0.58;
+
+    let best = null;
+    let bestDist = Infinity;
+
+    for (const b of bugs) {
+      if (!b.alive) continue;
+      const dx = (b.x - w/2);
+      const dy = (b.y - targetY);
+      const d = Math.hypot(dx*0.7, dy);
+      if (d < bestDist) { bestDist = d; best = b; }
+    }
+    if (!best) return;
+
+    const correct = best.key === hitKey;
+
+    if (correct) {
+      const s = Sev[best.key];
+      best.alive = false;
+
+      const bonus = Math.min(12, streak) * 2;
+      const gained = s.points + bonus;
+      score += gained;
+      streak += 1;
+
+      pop(best.x, best.y, s.color, 20);
+      textFloat(best.x, best.y, `+${gained}`, s.color);
+      sfx("hit");
+
+      applyLevel();
+      syncHud();
+    } else {
+      damage(1, "WRONG", best.x, best.y, "wrong");
+      syncHud();
+    }
+  }
+
+  // ✅ START FIX (works even when keyboard focus is weird)
+  function hardStart() {
+    try { if (!running) start(); } catch (err) { console.error("hardStart failed:", err); }
+  }
+  // any click/tap starts
+  document.addEventListener("pointerdown", hardStart, true);
+  // any key starts (capture)
+  document.addEventListener("keydown", (e) => {
+    const k = (e.key || "").toLowerCase();
+    if (["shift","control","alt","meta"].includes(k)) return;
+    hardStart();
+  }, true);
+  // force focus
+  setTimeout(() => {
+    try {
+      canvas.tabIndex = 0;
+      canvas.focus();
+      window.focus();
+    } catch {}
+  }, 50);
+
+  // --- keyboard input
+  window.addEventListener("keydown", (e) => {
+    const k = (e.key || "").toLowerCase();
+
+    if (k === "p") { if (!running) start(); paused = !paused; return; }
+    if (k === "r") { reset(); return; }
+    if (k === "m") { toggleMute(); return; }
+
+    const hitKey = (k === "1") ? "C" : (k === "2") ? "M" : (k === "3") ? "N" : null;
+    if (!hitKey) return;
+    classify(hitKey);
+  }, true);
+
+  // --- mobile controls
+  ui.controls.addEventListener("click", (e) => {
+    const btn = e.target.closest("button");
+    if (!btn) return;
+
+    const hit = btn.getAttribute("data-hit");
+    const act = btn.getAttribute("data-action");
+
+    if (hit === "1") return classify("C");
+    if (hit === "2") return classify("M");
+    if (hit === "3") return classify("N");
+
+    if (act === "pause") { if (!running) start(); paused = !paused; return; }
+    if (act === "restart") { reset(); return; }
+    if (act === "mute") { toggleMute(); return; }
+  }, { passive: true });
+
+  // --- loop
+  let last = performance.now();
+  function tick(now) {
+    const dt = Math.min(0.033, (now - last) / 1000);
+    last = now;
+
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+
+    const coarse = window.matchMedia && window.matchMedia("(pointer: coarse)").matches;
+    const safeBottom = coarse ? 140 : 90;
+    missLineY = h - safeBottom;
+
+    if (running && !paused) {
+      spawnTimer += dt * 1000;
+      if (spawnTimer >= spawnInterval) {
+        spawnTimer = 0;
+        spawnBug();
+        if (level >= 4 && Math.random() < 0.25) spawnBug();
+      }
+
+      for (const b of bugs) {
+        if (!b.alive) continue;
+        b.t += dt;
+        b.y += b.vy * dt;
+        b.x += Math.sin(b.t * 2.4) * b.wob * 18 * dt;
+
+        if (b.y - b.r > missLineY) {
+          b.alive = false;
+          damage(2, "MISS", b.x, missLineY, "miss");
+          syncHud();
+        }
+      }
+
+      bugs = bugs.filter(b => b.alive);
+    }
+
+    // particles
+    for (const p of particles) {
+      p.age += dt;
+      p.x += (p.vx || 0) * dt;
+      p.y += (p.vy || 0) * dt;
+      if (p.vy != null) p.vy += 220 * dt;
+    }
+    particles = particles.filter(p => p.age < p.life);
+
+    // --- draw
+    ctx.clearRect(0,0,w,h);
+
+    // background grid
+    ctx.save();
+    ctx.globalAlpha = 0.18;
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.lineWidth = 1;
+    const step = 36;
+    for (let x=0; x<w; x+=step) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke(); }
+    for (let y=0; y<h; y+=step) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke(); }
+    ctx.restore();
+
+    // vignette
+    ctx.save();
+    const grd = ctx.createRadialGradient(w*0.5, h*0.25, 80, w*0.5, h*0.6, Math.max(w,h));
+    grd.addColorStop(0, "rgba(0,0,0,0.00)");
+    grd.addColorStop(1, "rgba(0,0,0,0.35)");
+    ctx.fillStyle = grd;
+    ctx.fillRect(0,0,w,h);
+    ctx.restore();
+
+    // miss line
+    ctx.save();
+    ctx.strokeStyle = "rgba(255,255,255,0.18)";
+    ctx.setLineDash([6, 10]);
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, missLineY);
+    ctx.lineTo(w, missLineY);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = "rgba(255,255,255,0.55)";
+    ctx.font = "12px ui-sans-serif, system-ui";
+    ctx.fillText("MISS LINE", 12, missLineY - 10);
+    ctx.restore();
+
+    // bugs
+    for (const b of bugs) {
+      const s = Sev[b.key];
+      ctx.save();
+      ctx.translate(b.x, b.y);
+
+      // glow
+      ctx.globalAlpha = 0.25;
+      ctx.fillStyle = s.color;
+      ctx.beginPath();
+      ctx.arc(0,0,b.r*1.6,0,Math.PI*2);
+      ctx.fill();
+
+      // body shadow
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = "rgba(0,0,0,0.35)";
+      ctx.beginPath();
+      ctx.arc(2,3,b.r*1.05,0,Math.PI*2);
+      ctx.fill();
+
+      // body
+      ctx.fillStyle = s.color;
+      ctx.beginPath();
+      ctx.arc(0,0,b.r,0,Math.PI*2);
+      ctx.fill();
+
+      // legs
+      ctx.strokeStyle = "rgba(0,0,0,0.45)";
+      ctx.lineWidth = 2;
+      for (let i=-2;i<=2;i++){
+        ctx.beginPath(); ctx.moveTo(-b.r*0.2, i*4); ctx.lineTo(-b.r*0.9, i*6); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo( b.r*0.2, i*4); ctx.lineTo( b.r*0.9, i*6); ctx.stroke();
+      }
+
+      // label
+      ctx.fillStyle = "rgba(255,255,255,0.95)";
+      ctx.font = "900 12px ui-sans-serif, system-ui";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(s.key, 0, 1);
+      ctx.restore();
+    }
+
+    // particles
+    for (const p of particles) {
+      const t = 1 - (p.age / p.life);
+      ctx.save();
+      ctx.globalAlpha = Math.max(0, t);
+      if (p.text) {
+        ctx.fillStyle = p.color;
+        ctx.font = "900 18px ui-sans-serif, system-ui";
+        ctx.textAlign = "center";
+        ctx.fillText(p.text, p.x, p.y);
+      } else {
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 2.2, 0, Math.PI*2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    // pause overlay
+    if (paused && running) {
+      ctx.save();
+      ctx.fillStyle = "rgba(0,0,0,0.45)";
+      ctx.fillRect(0,0,w,h);
+      ctx.fillStyle = "rgba(255,255,255,0.92)";
+      ctx.font = "900 34px ui-sans-serif, system-ui";
+      ctx.textAlign = "center";
+      ctx.fillText("PAUSADO", w/2, h/2 - 10);
+      ctx.font = "14px ui-sans-serif, system-ui";
+      ctx.fillText("Pressione P ou toque em Pausar para continuar", w/2, h/2 + 18);
+      ctx.restore();
+    }
+
+    requestAnimationFrame(tick);
+  }
+
+  // init
+  renderLB();
+  reset();
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>
